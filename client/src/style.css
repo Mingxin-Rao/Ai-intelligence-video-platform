@@ -1,0 +1,31 @@
+/*
+ * Global base styles. The main application look & feel lives in the (unscoped)
+ * <style> block of App.vue; this file only sets a neutral, dark-friendly base
+ * so it never fights the app's full-width layout.
+ */
+:root {
+  font-family: 'Space Grotesk', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* App is a dark-themed UI; opt into dark rendering. */
+  color-scheme: dark;
+  color: #e0e0e0;
+  background-color: #0b0c10;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #0b0c10;
+}

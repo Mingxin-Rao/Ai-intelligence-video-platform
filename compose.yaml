@@ -1,0 +1,76 @@
+services:
+  # 1. MySQL (Database)
+  mysql:
+    image: mysql:8.0
+    container_name: dovideo-mysql
+    platform: linux/amd64 # Better compatibility on Apple Silicon
+    ports:
+      # Host 3307 -> container 3306, to avoid clashing with a local MySQL already on 3306
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: media_db
+    volumes:
+      # Auto-create tables on first initialization
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - my-network
+
+  # 2. Redis (Cache)
+  redis:
+    image: redis:latest
+    container_name: dovideo-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - my-network
+
+  # 3. MinIO (Storage)
+  minio:
+    image: minio/minio
+    container_name: dovideo-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    networks:
+      - my-network
+
+  # 4. RocketMQ NameServer
+  rmqnamesrv:
+    image: apache/rocketmq:4.9.4
+    platform: linux/amd64
+    container_name: rmqnamesrv
+    ports:
+      - 9876:9876
+    environment:
+      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+    command: sh mqnamesrv
+    networks:
+      - my-network
+
+  # 5. RocketMQ Broker
+  rmqbroker:
+    image: apache/rocketmq:4.9.4
+    platform: linux/amd64
+    container_name: rmqbroker
+    ports:
+      - 10911:10911
+      - 10909:10909
+    environment:
+      - NAMESRV_ADDR=rmqnamesrv:9876
+      - JAVA_OPT_EXT=-server -Xms256m -Xmx256m -Xmn128m
+    volumes:
+      - ./rocketmq/broker.conf:/opt/rocketmq-4.9.4/conf/broker.conf
+    command: sh mqbroker -n rmqnamesrv:9876 -c /opt/rocketmq-4.9.4/conf/broker.conf
+    depends_on:
+      - rmqnamesrv
+    networks:
+      - my-network
+
+networks:
+  my-network:
+    driver: bridge
