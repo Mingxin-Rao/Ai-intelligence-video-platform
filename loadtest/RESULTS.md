@@ -93,11 +93,55 @@ Verified end to end rather than assumed:
 
 ---
 
-## Not measured yet
+## 4. Async dispatch vs synchronous equivalent
 
-- **Async dispatch RT** (`GET /debug/ai`). The endpoint is capped at 10/min by
-  the global rate limiter and each admitted request costs a real provider call,
-  so it is deliberately left out of the automated runs.
+The claim this measures: moving transcoding and the LLM call off the request path
+turns a long wait into an immediate response.
+
+Measured directly, both sides from real runs — the dispatch RT with `curl`, and
+the "how long would the user have waited synchronously" side from the app's own
+`dovideo_ai_task_seconds` timer, which covers FFmpeg extraction plus the provider
+round-trip plus persistence. No synthetic baseline endpoint was built; the timer
+*is* the synchronous cost.
+
+| Input | Work duration (sync equivalent) | Dispatch RT (async) |
+|---|---|---|
+| 60s video, 640x480, 852 KB | **7.4 s** avg over 3 runs (max 7.9 s) | 81 ms, 157 ms (417 ms cold) |
+| 5 min video, 720p, 5.4 MB | **12.3 s** | **73 ms** |
+
+**~100-170x faster response.** Five times the video length cost only 1.7x the
+work time, so duration is dominated by the provider round-trip rather than by
+FFmpeg or by input size.
+
+Not reproduced: the previously quoted ~60 s synchronous baseline. On this setup
+the synchronous cost of a one-minute clip is 7.4 s, not 60 s. A real video with
+speech would plausibly cost the model more thinking time than a synthetic tone
+does, but that has not been measured, so the defensible figure here is the one
+above.
+
+The dispatch endpoint does around seven network round-trips before returning
+(Redisson lock, rate limiter, MySQL read, MySQL write, cache invalidation, MQ
+publish, unlock), which is why it lands near 80 ms rather than in single-digit
+milliseconds on Docker Desktop for macOS.
+
+### Two defects this measurement exposed
+
+Neither was visible from reading the code:
+
+1. `brokerIP1 = 127.0.0.1` in `rocketmq/broker.conf` was correct while the app ran
+   on the host, but the broker advertises that address to the NameServer and
+   clients then dial it directly — so from inside the app container it resolved to
+   the app itself. Every publish failed with "No route info of this topic", i.e.
+   the async path had been broken since containerization, and nothing failed at
+   startup to say so.
+2. The `[MQ] Queued` placeholder was written before publishing and never rolled
+   back, so one transient broker error left the row carrying the marker forever
+   and the idempotency check rejected every retry as "already running" — a
+   permanently unretryable task.
+
+---
+
+## Not measured yet
 - **Multi-instance behaviour.** Everything above is one app instance; the
   horizontal-scaling design (stateless API, shared Redis locks, MQ consumers) is
   argued but not load-verified.
