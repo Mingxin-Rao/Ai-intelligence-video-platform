@@ -101,6 +101,7 @@ public class DebugController {
             }
 
             // Update status (the [MQ] placeholder lets the frontend detect the "processing" state).
+            String previousSummary = file.getAiSummary();
             file.setAiSummary("⏳ [MQ] Queued — waiting to be scheduled...");
             mediaFileMapper.updateById(file);
             String userIdKey = (file.getUserId() == null) ? "anon" : String.valueOf(file.getUserId());
@@ -108,7 +109,18 @@ public class DebugController {
 
             // Send the message
             AnalysisTaskMsg msg = new AnalysisTaskMsg(id, "START_ANALYSIS");
-            rocketMQTemplate.convertAndSend("video-analysis-topic", msg);
+            try {
+                rocketMQTemplate.convertAndSend("video-analysis-topic", msg);
+            } catch (Exception sendFailure) {
+                // Roll the placeholder back. Without this the row keeps the [MQ]
+                // marker forever, the idempotency check above rejects every later
+                // attempt as "already running", and the task becomes unretryable —
+                // a permanently stuck row from one transient broker error.
+                file.setAiSummary(previousSummary);
+                mediaFileMapper.updateById(file);
+                redisTemplate.delete("media:list:user:" + userIdKey);
+                throw sendFailure;
+            }
 
             return "✅ Task dispatched to RocketMQ!";
 

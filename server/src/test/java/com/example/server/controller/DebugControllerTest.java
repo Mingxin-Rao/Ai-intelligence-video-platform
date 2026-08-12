@@ -125,6 +125,28 @@ class DebugControllerTest {
         }
 
         @Test
+        @DisplayName("A failed publish rolls the placeholder back so the task stays retryable")
+        void failedPublishRollsBackPlaceholder() throws Exception {
+            allowLockAndRateLimit();
+            when(lock.isHeldByCurrentThread()).thenReturn(true);
+            MediaFile file = media(10L, USER_ID);
+            // A previous successful summary must survive a failed re-analysis
+            file.setAiSummary("summary from an earlier run");
+            when(mediaFileMapper.selectById(10L)).thenReturn(file);
+            org.mockito.Mockito.doThrow(new RuntimeException("No route info of this topic"))
+                    .when(rocketMQTemplate).convertAndSend(anyString(), any(Object.class));
+
+            String result = debugController.aiAnalyze(10L, authedRequest(USER_ID));
+
+            assertThat(result).startsWith("❌");
+            // Without the rollback the [MQ] marker would survive, and the
+            // idempotency check would reject every retry as "already running" —
+            // one transient broker error would brick the row permanently.
+            assertThat(file.getAiSummary()).isEqualTo("summary from an earlier run");
+            verify(mediaFileMapper, org.mockito.Mockito.times(2)).updateById(file);
+        }
+
+        @Test
         @DisplayName("A concurrent double-click is refused without publishing")
         void concurrentSubmissionIsRefused() throws Exception {
             when(redissonClient.getLock(anyString())).thenReturn(lock);
