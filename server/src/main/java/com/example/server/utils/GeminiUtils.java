@@ -27,6 +27,12 @@ public class GeminiUtils {
     @Value("${ai.gemini.model-name:gemini-3-flash-preview}")
     private String modelName;
 
+    // Configurable like the OpenAI client's base URL: lets the endpoint be pointed
+    // at a proxy or a compatible gateway, and makes this class testable against a
+    // local stub instead of only against the real API.
+    @Value("${ai.gemini.base-url:https://generativelanguage.googleapis.com/v1beta}")
+    private String baseUrl;
+
     // Multimodal processing needs a longer timeout because uploading audio takes time.
     private final OkHttpClient client = new OkHttpClient.Builder()
             .connectTimeout(60, TimeUnit.SECONDS)
@@ -48,7 +54,7 @@ public class GeminiUtils {
 
         //    Build the multimodal request body (model name comes from ai.gemini.model-name).
         //    Note: use an audio-capable Gemini model (e.g. gemini-1.5-flash / 2.0-flash); gemma has no audio.
-        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+        String url = baseUrl.replaceAll("/+$", "") + "/models/"
                 + modelName + ":generateContent?key=" + apiKey;
 
         JSONObject payload = new JSONObject();
