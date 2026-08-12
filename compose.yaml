@@ -1,4 +1,54 @@
 services:
+  # 0. The application itself (Spring Boot 3 + FFmpeg + yt-dlp)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dovideo-app
+    ports:
+      # Host port is overridable (set APP_PORT in .env) so it can coexist with
+      # another project already bound to 9090. Container port stays fixed.
+      - "${APP_PORT:-9090}:9090"
+    # Secrets come from .env (gitignored); see .env.example for the template.
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network the app reaches middleware by service name,
+      # not localhost — these override the host-machine defaults baked into
+      # application.properties.
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MINIO_ENDPOINT: http://minio:9000
+      ROCKETMQ_NAMESERVER: rmqnamesrv:9876
+      # Tool paths inside the image (Debian) differ from macOS/Homebrew.
+      FFMPEG_DIR: /usr/bin
+      YTDLP_PATH: /usr/local/bin/yt-dlp
+    depends_on:
+      # Wait for readiness, not just container start — this is what prevents the
+      # classic "app boots faster than MySQL and dies on connection refused".
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rmqnamesrv:
+        condition: service_started
+      rmqbroker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9090/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Generous grace period: JVM + Spring context startup.
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - my-network
+
   # 1. MySQL (Database)
   mysql:
     image: mysql:8.0
@@ -13,15 +63,27 @@ services:
     volumes:
       # Auto-create tables on first initialization
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     networks:
       - my-network
 
-  # 2. Redis (Cache)
+  # 2. Redis (Cache & Lock)
   redis:
     image: redis:latest
     container_name: dovideo-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - my-network
 
@@ -36,6 +98,13 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - my-network
 
@@ -70,6 +139,11 @@ services:
       - rmqnamesrv
     networks:
       - my-network
+
+# Named volumes so data survives `docker-compose down` (use `down -v` to wipe).
+volumes:
+  mysql-data:
+  minio-data:
 
 networks:
   my-network:
