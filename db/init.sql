@@ -33,9 +33,14 @@ CREATE TABLE IF NOT EXISTS media_files (
     ai_summary      LONGTEXT      DEFAULT NULL COMMENT 'AI summary',
     transcript_text LONGTEXT      DEFAULT NULL COMMENT 'Transcript text',
     cover_url       VARCHAR(1000) DEFAULT NULL COMMENT 'Cover URL',
-    video_md5       VARCHAR(32)   DEFAULT NULL COMMENT 'Content MD5 fingerprint (for dedup)',
+    -- Dedup keys: video_md5 for direct file uploads (bytes are the identity),
+    -- source_video_id for link imports (upstream id is stable across URL forms
+    -- and re-encodes). Exactly one is populated per row.
+    video_md5       VARCHAR(32)   DEFAULT NULL COMMENT 'Content MD5 (file uploads)',
+    source_video_id VARCHAR(255)  DEFAULT NULL COMMENT 'Upstream id, e.g. youtube:xxx (link imports)',
     upload_time     DATETIME      DEFAULT CURRENT_TIMESTAMP COMMENT 'Uploaded at',
     PRIMARY KEY (id),
     KEY idx_user_id (user_id),
-    KEY idx_user_md5 (user_id, video_md5)
+    KEY idx_user_md5 (user_id, video_md5),
+    KEY idx_user_source (user_id, source_video_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'Uploaded media files';

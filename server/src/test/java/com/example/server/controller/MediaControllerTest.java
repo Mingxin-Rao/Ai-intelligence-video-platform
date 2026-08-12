@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -17,6 +18,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.util.DigestUtils;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -135,6 +140,81 @@ class MediaControllerTest {
             verify(minioUtils).uploadFile(any(), objectName.capture());
             // Extension is preserved so FFmpeg/players still see a sane container type
             assertThat(objectName.getValue()).isEqualTo(md5 + ".mov");
+        }
+    }
+
+    @Nested
+    @DisplayName("Link import dedup (by source video id, not content hash)")
+    class LinkDedup {
+
+        private static final String SOURCE_ID = "youtube:dQw4w9WgXcQ";
+
+        @Test
+        @DisplayName("A link for a video the user already has is refused before downloading")
+        void duplicateLinkSkipsTheDownloadEntirely() throws Exception {
+            when(ytDlpUtils.extractSourceId(anyString())).thenReturn(SOURCE_ID);
+            MediaFile owned = existingRecord(77L, USER_ID, null);
+            owned.setSourceVideoId(SOURCE_ID);
+            when(mediaFileMapper.selectOne(any())).thenReturn(owned);
+
+            var response = mediaController.uploadUrl("https://youtu.be/dQw4w9WgXcQ?t=30",
+                    authedRequest(USER_ID));
+
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+            assertThat(response.getBody()).contains("duplicate");
+            // The payoff of keying on the id: the expensive download never happens
+            verify(ytDlpUtils, never()).downloadVideo(anyString());
+            verify(minioUtils, never()).uploadLocalFile(any(), anyString());
+            verify(mediaFileMapper, never()).insert(any(MediaFile.class));
+        }
+
+        @Test
+        @DisplayName("A new link is stored under its source id and the id is persisted")
+        void freshLinkIsStoredUnderSourceId(@TempDir Path tempDir) throws Exception {
+            File downloaded = tempDir.resolve("random-uuid.mp4").toFile();
+            Files.write(downloaded.toPath(), "downloaded video bytes".getBytes());
+
+            when(ytDlpUtils.extractSourceId(anyString())).thenReturn(SOURCE_ID);
+            when(mediaFileMapper.selectOne(any())).thenReturn(null);
+            when(ytDlpUtils.downloadVideo(anyString())).thenReturn(downloaded);
+            when(minioUtils.uploadLocalFile(any(), anyString()))
+                    .thenReturn("http://minio:9000/media/youtube_dQw4w9WgXcQ.mp4");
+
+            var response = mediaController.uploadUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    authedRequest(USER_ID));
+
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+
+            // The colon is sanitized so the object key stays URL-safe
+            ArgumentCaptor<String> objectName = ArgumentCaptor.forClass(String.class);
+            verify(minioUtils).uploadLocalFile(any(), objectName.capture());
+            assertThat(objectName.getValue()).isEqualTo("youtube_dQw4w9WgXcQ.mp4");
+
+            ArgumentCaptor<MediaFile> saved = ArgumentCaptor.forClass(MediaFile.class);
+            verify(mediaFileMapper).insert(saved.capture());
+            assertThat(saved.getValue().getSourceVideoId()).isEqualTo(SOURCE_ID);
+            // Links are identified by their id alone — no content hash is computed
+            assertThat(saved.getValue().getVideoMd5()).isNull();
+        }
+
+        @Test
+        @DisplayName("An unresolvable link still imports, just without dedup")
+        void unresolvableLinkStillImports(@TempDir Path tempDir) throws Exception {
+            File downloaded = tempDir.resolve("fallback-name.mp4").toFile();
+            Files.write(downloaded.toPath(), "bytes".getBytes());
+
+            // yt-dlp could not resolve an id (private video, odd site, network hiccup)
+            when(ytDlpUtils.extractSourceId(anyString())).thenReturn(null);
+            when(ytDlpUtils.downloadVideo(anyString())).thenReturn(downloaded);
+            when(minioUtils.uploadLocalFile(any(), anyString())).thenReturn("http://minio:9000/media/x");
+
+            var response = mediaController.uploadUrl("https://example.com/video", authedRequest(USER_ID));
+
+            // Fail open: the import succeeds rather than being blocked on a lookup
+            assertThat(response.getStatusCode().value()).isEqualTo(200);
+            ArgumentCaptor<MediaFile> saved = ArgumentCaptor.forClass(MediaFile.class);
+            verify(mediaFileMapper).insert(saved.capture());
+            assertThat(saved.getValue().getSourceVideoId()).isNull();
         }
     }
 

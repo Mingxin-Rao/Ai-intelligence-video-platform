@@ -24,9 +24,12 @@ public class MediaFile {
     private String transcriptText;
     private String coverUrl;
 
-    // Content fingerprint (MD5 of the file bytes). Used to dedup identical uploads
-    // so the same video is not stored / analyzed twice. Maps to column video_md5.
+    // Dedup keys — exactly one is set depending on how the video arrived:
+    //   videoMd5      : direct file uploads, where the bytes are the identity.
+    //   sourceVideoId : link imports, e.g. "youtube:dQw4w9WgXcQ". Stable across
+    //                   URL forms and re-encodes, unlike a hash of the download.
     private String videoMd5;
+    private String sourceVideoId;
 
     // [Modification] Removed the @TableField(fill = ...) annotation
     // Upload time is recorded automatically by the database; Java does not intervene, preventing errors
