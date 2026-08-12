@@ -18,13 +18,13 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # JDK 17 is pinned deliberately: Lombok 1.18.30 fails to compile on newer
       # JDKs ("TypeTag :: UNKNOWN"), so letting the runner pick a default would
       # break the build unpredictably.
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -45,6 +45,12 @@ jobs:
             echo "No JaCoCo report produced." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          # Echo to stdout as well: step summaries are not exposed by the REST API
+          # or gh, so anything written only there is invisible to tooling.
+          awk -F, 'NR>1 {mi+=$4; ci+=$5; mb+=$6; cb+=$7} END {
+            printf "COVERAGE instruction=%.1f%% (%d/%d) branch=%.1f%% (%d/%d)\n",
+                   ci*100/(mi+ci), ci, mi+ci, cb*100/(mb+cb), cb, mb+cb;
+          }' "$CSV"
           {
             echo "## Coverage"
             echo ""
@@ -61,7 +67,7 @@ jobs:
       # Keep the raw reports so a failing run can be diagnosed after the fact
       - name: Upload test & coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-and-coverage-reports
           path: |
@@ -75,14 +81,14 @@ jobs:
     # Don't spend time building an image from code that fails its tests
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Build only (no registry push): this proves the Dockerfile is valid and
       # the app is genuinely containerizable on every change.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -94,11 +100,14 @@ jobs:
       - name: Report image size
         run: |
           SIZE=$(docker image inspect dovideo-app:ci --format '{{.Size}}')
+          HUMAN=$(numfmt --to=iec "$SIZE")
+          # stdout too, so the number is retrievable from the logs (see above)
+          echo "IMAGE_SIZE=$HUMAN ($SIZE bytes)"
           {
             echo "## Image"
             echo ""
             echo "- **Tag:** \`dovideo-app:ci\`"
-            echo "- **Size:** $(numfmt --to=iec "$SIZE")"
+            echo "- **Size:** $HUMAN"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Fail loudly if the two native tools the app shells out to are missing —
