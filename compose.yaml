@@ -177,6 +177,20 @@ services:
     networks:
       - my-network
 
+  # 8. Toxiproxy — a controllable proxy in front of the app, used by the weak-network
+  #    load test to inject connection failures. Idle and harmless otherwise; no
+  #    toxic is configured until a test creates one.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    container_name: dovideo-toxiproxy
+    ports:
+      - "${TOXIPROXY_API_PORT:-8474}:8474"   # control API
+      - "${TOXIPROXY_APP_PORT:-9099}:9099"   # degraded route to the app
+    depends_on:
+      - app
+    networks:
+      - my-network
+
 # Named volumes so data survives `docker-compose down` (use `down -v` to wipe).
 volumes:
   mysql-data:

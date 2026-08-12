@@ -31,3 +31,7 @@ yarn-error.log*
 
 # ---- Misc build output ----
 output/
+
+# Generated load-test payload (20MB); recreate with:
+#   dd if=/dev/urandom of=loadtest/assets/large.bin bs=1m count=20
+loadtest/assets/large.bin
