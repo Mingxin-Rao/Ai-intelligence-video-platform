@@ -299,12 +299,15 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { marked } from 'marked'
+import SparkMD5 from 'spark-md5'
 
 // --- State definitions ---
 const file = ref(null)
 const videoUrl = ref('')
 const message = ref('')
 const uploading = ref(false)
+// 0-100; drives the chunked-upload progress readout
+const uploadProgress = ref(0)
 const list = ref([])
 const isDragOver = ref(false)
 const sidebar = ref({ visible: false, type: 'ai', title: '', content: '', loading: false })
@@ -380,27 +383,126 @@ const handleDrop = async (e) => {
   await uploadFile()
 }
 
-// Local file upload
+// ---------------------------------------------------------------------------
+// Resumable chunked upload.
+//
+// A single PUT of a multi-GB file must survive one uninterrupted connection; on a
+// flaky link that fails and the whole transfer restarts. Slicing means a failure
+// costs one chunk, and the server can be asked what is still missing before
+// resuming — including across a page reload, since the state is keyed by content
+// hash rather than by session.
+// ---------------------------------------------------------------------------
+
+// Hash the file incrementally so a multi-GB file is never held in memory at once.
+const computeFileMd5 = async (f, chunkSize, onProgress) => {
+  const spark = new SparkMD5.ArrayBuffer()
+  const total = Math.ceil(f.size / chunkSize)
+  for (let i = 0; i < total; i++) {
+    const slice = f.slice(i * chunkSize, Math.min((i + 1) * chunkSize, f.size))
+    spark.append(await slice.arrayBuffer())
+    if (onProgress) onProgress(Math.round(((i + 1) / total) * 100))
+  }
+  return spark.end()
+}
+
+// Bounded concurrency: enough sockets to fill the link, few enough that a stall
+// does not tie up the whole browser connection pool.
+const CHUNK_CONCURRENCY = 3
+const MAX_PASSES = 4
+
 const uploadFile = async () => {
   if (!file.value) return
+  const f = file.value
   uploading.value = true
-  message.value = 'Establishing a secure channel and uploading data…'
-  const formData = new FormData()
-  formData.append('file', file.value)
+  uploadProgress.value = 0
 
   try {
-    const res = await authFetch(`${API_BASE}/media/upload`, {
-      method: 'POST',
-      body: formData
+    message.value = 'Fingerprinting file…'
+    // Provisional size; init returns the size the server actually wants
+    let chunkSize = 5 * 1024 * 1024
+    const fileMd5 = await computeFileMd5(f, chunkSize, (p) => {
+      message.value = `Fingerprinting file… ${p}%`
     })
-    const text = await res.text()
-    if (!res.ok) throw new Error(text || 'Upload failed')
 
-    showMsg('✅ Local upload complete')
+    // 1. Ask what is needed. Already-known content needs no transfer at all.
+    const initBody = new FormData()
+    initBody.append('fileMd5', fileMd5)
+    initBody.append('totalSize', String(f.size))
+    const initRes = await authFetch(`${API_BASE}/media/upload/init`, { method: 'POST', body: initBody })
+    const init = await initRes.json()
+    if (init.status === 'ERROR') throw new Error(init.msg || 'Init failed')
+
+    if (init.status === 'INSTANT') {
+      uploadProgress.value = 100
+      showMsg('✅ Already uploaded — skipped the transfer entirely')
+      fetchList()
+      return
+    }
+
+    chunkSize = Number(init.chunkSize) || chunkSize
+    const totalChunks = Number(init.totalChunks)
+    let missing = init.missingChunks || []
+    if (missing.length < totalChunks) {
+      message.value = `Resuming: ${totalChunks - missing.length}/${totalChunks} chunks already stored`
+    }
+
+    // 2. Send what is missing, re-asking between passes so only true gaps are retried.
+    for (let pass = 0; pass < MAX_PASSES && missing.length > 0; pass++) {
+      const queue = [...missing]
+      const failed = []
+
+      const worker = async () => {
+        while (queue.length > 0) {
+          const index = queue.shift()
+          const slice = f.slice(index * chunkSize, Math.min((index + 1) * chunkSize, f.size))
+          const body = new FormData()
+          body.append('file', slice, `${fileMd5}-${index}`)
+          body.append('fileMd5', fileMd5)
+          body.append('chunkIndex', String(index))
+          try {
+            const res = await authFetch(`${API_BASE}/media/upload/chunk`, { method: 'POST', body })
+            const json = await res.json()
+            if (json.status !== 'OK') throw new Error(json.msg || 'chunk rejected')
+          } catch (e) {
+            // Re-queued for the next pass rather than failing the whole upload
+            failed.push(index)
+          }
+          uploadProgress.value = Math.min(99, Math.round(((totalChunks - queue.length - failed.length) / totalChunks) * 100))
+          message.value = `Uploading… ${uploadProgress.value}%`
+        }
+      }
+
+      await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, queue.length) }, worker))
+      missing = failed
+      if (missing.length > 0) {
+        message.value = `${missing.length} chunk(s) failed — retrying just those…`
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new Error(`${missing.length} chunk(s) could not be delivered after ${MAX_PASSES} passes`)
+    }
+
+    // 3. Merge server-side. Refused if anything is still missing.
+    message.value = 'Merging…'
+    const mergeBody = new FormData()
+    mergeBody.append('fileMd5', fileMd5)
+    mergeBody.append('fileName', f.name)
+    mergeBody.append('totalChunks', String(totalChunks))
+    const mergeRes = await authFetch(`${API_BASE}/media/upload/merge`, { method: 'POST', body: mergeBody })
+    const merged = await mergeRes.json()
+    if (merged.status === 'INCOMPLETE') {
+      throw new Error(`Server still missing chunks: ${(merged.missingChunks || []).join(', ')}`)
+    }
+    if (merged.status === 'ERROR') throw new Error(merged.msg || 'Merge failed')
+
+    uploadProgress.value = 100
+    showMsg('✅ Upload complete')
     fetchList()
   } catch (error) {
     console.error(error)
-    showMsg('❌ Upload failed: ' + error.message, true)
+    // Delivered chunks stay on the server, so a retry resumes instead of restarting
+    showMsg('❌ Upload failed: ' + error.message + ' (progress kept — retry to resume)', true)
   } finally {
     uploading.value = false
   }

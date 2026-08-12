@@ -65,6 +65,53 @@ public class MinioUtils {
     }
 
     /**
+     * Merge staged chunk objects into one object, server-side.
+     *
+     * MinIO composes from the parts it already holds, so the merge never pulls the
+     * bytes back through this process — a 2 GB file costs no application memory or
+     * bandwidth. Requires every part except the last to be at least 5 MiB, which is
+     * why the chunk size is fixed at that floor.
+     *
+     * @param partObjectNames chunk object names, already in byte order
+     * @return the access URL of the merged object
+     */
+    public String composeObject(java.util.List<String> partObjectNames, String objectName) throws Exception {
+        java.util.List<io.minio.ComposeSource> sources = new java.util.ArrayList<>();
+        for (String part : partObjectNames) {
+            sources.add(io.minio.ComposeSource.builder()
+                    .bucket(bucketName)
+                    .object(part)
+                    .build());
+        }
+
+        minioClient.composeObject(
+                io.minio.ComposeObjectArgs.builder()
+                        .bucket(bucketName)
+                        .object(objectName)
+                        .sources(sources)
+                        .build()
+        );
+
+        return endpoint + "/" + bucketName + "/" + objectName;
+    }
+
+    /**
+     * Delete several objects, used to clear staged chunks after a merge.
+     * Failures are logged, not thrown: the merged object already exists, so leftover
+     * scratch objects are a cleanup problem rather than a failed upload.
+     */
+    public void removeObjects(java.util.List<String> objectNames) {
+        for (String name : objectNames) {
+            try {
+                minioClient.removeObject(
+                        RemoveObjectArgs.builder().bucket(bucketName).object(name).build());
+            } catch (Exception e) {
+                System.err.println(" MinIO chunk cleanup failed for " + name + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
      * [New] Upload a local File object to MinIO under an explicit (MD5-based) object name.
      */
     public String uploadLocalFile(java.io.File file, String objectName) throws Exception {

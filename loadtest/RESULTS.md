@@ -141,6 +141,75 @@ Neither was visible from reading the code:
 
 ---
 
+## 5. Weak network: monolithic upload vs resumable chunked upload
+
+### Failure model
+
+Toxiproxy `limit_data`, which severs a connection once it has carried more than a
+set number of bytes upstream. This is deliberately *not* packet loss — it models
+the thing that actually breaks large uploads: the longer a single transfer runs on
+a degraded link, the less likely it is to finish. With the threshold between the
+chunk size and the file size, a monolithic PUT cannot complete while any single
+chunk always can.
+
+```bash
+docker compose up -d toxiproxy
+curl -X POST http://localhost:8474/proxies -H 'Content-Type: application/json' \
+  -d '{"name":"app","listen":"0.0.0.0:9099","upstream":"app:9090","enabled":true}'
+curl -X POST http://localhost:8474/proxies/app/toxics -H 'Content-Type: application/json' \
+  -d '{"name":"cut_long_transfers","type":"limit_data","stream":"upstream",
+       "toxicity":1.0,"attributes":{"bytes":8388608}}'
+
+BASE_URL=http://localhost:9099 k6 run loadtest/weak-network-upload.js
+```
+
+Parameters: 20 MB payload, 5 MiB chunks (4 chunks), 8 MiB connection budget,
+`noConnectionReuse` so the budget applies per transfer attempt, retry budget of 4
+for **both** arms — so what is measured is resumability, not persistence.
+
+### Results (10 uploads per arm)
+
+| | Monolithic | Chunked + resume |
+|---|---|---|
+| **Success rate** | **0%** (0/10) | **100%** (10/10) |
+| Bytes sent | **838,860,800** (800 MB) | **209,715,200** (200 MB) |
+| Avg duration | 739 ms | 636 ms |
+
+Two things to read here. The success rate is the headline: **0% → 100%**. But the
+bytes tell the more interesting story — the monolithic arm pushed **800 MB to
+deliver nothing**, because every one of its 40 attempts re-sent the whole file
+before being cut. The chunked arm sent exactly 200 MB, i.e. 20 MB × 10 uploads
+with **zero retransmission**: every chunk fit under the budget, so nothing had to
+be sent twice.
+
+The 0% is deterministic by construction (toxicity 1.0 means *every* connection
+over 8 MiB is cut), which is the point — it isolates the mechanism rather than
+producing a noisy probability. A partial toxicity would land somewhere between.
+
+### End-to-end resume, verified by hand
+
+```
+init                      -> missing [0, 1, 2, 3]
+upload only chunks 0, 2   (simulating an interrupted transfer)
+init again                -> uploaded [0, 2], missing [1, 3]   <- resumes, does not restart
+merge early               -> INCOMPLETE, missing [1, 3]        <- refuses to compose a gapped object
+upload 1, 3; merge        -> COMPLETE
+```
+
+The second `init` is the whole feature: state is keyed by uploader + content hash
+in a Redis Set, so it survives a page reload and a client restart, and re-sending
+an already-delivered chunk is absorbed by the Set rather than corrupting the count.
+
+### Known gap
+
+The server treats `fileMd5` as an opaque key and never verifies it against the
+bytes received. A client could therefore claim a hash that does not match its
+content and poison its own dedup entry. Not exploitable across users (the key is
+scoped per user), but it means dedup trusts the client — worth closing by hashing
+server-side during merge.
+
+---
+
 ## Not measured yet
 - **Multi-instance behaviour.** Everything above is one app instance; the
   horizontal-scaling design (stateless API, shared Redis locks, MQ consumers) is
