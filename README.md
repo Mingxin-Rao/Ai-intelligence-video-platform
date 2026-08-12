@@ -43,20 +43,12 @@ Most video platforms only solve the problems of "storage" and "playback." DoVide
 
 ## Project Preview
 
-![Project Overview](https://github.com/user-attachments/assets/e2f27517-c43d-4032-a8a1-ee6de5121629)
+<!-- TODO: Record a short demo (screen recording of upload → async processing → AI summary)
+     and drop the GIF/video in here. Replace the line below with:
+     ![DoVideoAI Demo](docs/demo.gif)
+     or, for a video, a link to the uploaded asset. -->
 
-<img width="2879" height="1719" alt="Register and Login" src="https://github.com/user-attachments/assets/85e6ebbc-a0da-488b-bdfe-9b5be7616e53" />
-
-<img width="2874" height="1416" alt="Showcase Area" src="https://github.com/user-attachments/assets/b887e8fb-4e26-477d-b893-1f2b0d9774cc" />
-
-<img width="2873" height="1666" alt="Workspace" src="https://github.com/user-attachments/assets/b393966f-4b7b-4b1b-b305-dd933f86ed64" />
-
-<img width="2874" height="1702" alt="Text Extraction" src="https://github.com/user-attachments/assets/5685a5ea-2404-4087-89a8-36b89d822810" />
-
-<img width="2874" height="1714" alt="AI Invocation and Analysis" src="https://github.com/user-attachments/assets/9115f18e-2465-4e28-bc22-731c1cc59d33" />
-
-![L4J](https://github.com/user-attachments/assets/af329c20-c689-4d3b-9d23-9fe51a0ef81e)
-
+> 🎬 **Demo coming soon** — a short walkthrough GIF will be added here.
 
 <br/>
 
@@ -198,8 +190,6 @@ This project relies on several middleware services, which are packaged into a Do
 # (includes MySQL, Redis, MinIO, RocketMQ, Dashboard)
 docker-compose up -d
 ```
-<img width="920" height="288" alt="One-Click Deployment" src="https://github.com/user-attachments/assets/592ce99a-18c8-4bec-96cc-f6d709f4aad1" />
-
 
 ### Backend Configuration Changes
 
@@ -220,22 +210,28 @@ ai.openai.api-key=sk-your-openai-key
 ```
 
 #### 3. Make sure FFmpeg and yt-dlp are installed locally, and fill in their paths:
-```properties
-# Windows example (note the use of forward slashes /)
-tool.ffmpeg.dir=D:/ffmpeg/bin
-tool.ytdlp.path=D:/yt-dlp/yt-dlp.exe
 
-# Mac/Linux example
+On macOS the easiest way is Homebrew: `brew install ffmpeg yt-dlp`. Then run `which ffmpeg` and `which yt-dlp` to confirm the paths below.
+
+```properties
+# macOS (Apple Silicon / Homebrew) example
+tool.ffmpeg.dir=/opt/homebrew/bin
+tool.ytdlp.path=/opt/homebrew/bin/yt-dlp
+
+# macOS (Intel) / Linux example
 # tool.ffmpeg.dir=/usr/local/bin
 # tool.ytdlp.path=/usr/local/bin/yt-dlp
+
+# Windows example (note the use of forward slashes /)
+# tool.ffmpeg.dir=D:/ffmpeg/bin
+# tool.ytdlp.path=D:/yt-dlp/yt-dlp.exe
 ```
 
 ### Start the Project
 
 🟢 Start the Backend
 
-```properties
-
+```bash
 cd server
 
 # Start the service
@@ -245,17 +241,15 @@ mvn clean spring-boot:run
 
 🔵 Start the Frontend
 
-```properties
-
+```bash
 cd client
+
 # 1. Install dependencies
 npm install
 
 # 2. Start development mode
 npm run dev
 ```
-
-<img width="2873" height="1770" alt="Frontend and Backend Startup" src="https://github.com/user-attachments/assets/12ddc037-b60b-4f9e-9d78-280864cf95b4" />
 
 Open the address displayed in the frontend interface (the default is http://localhost:5173),
 and you can then access the project successfully!
