@@ -102,6 +102,46 @@ class AiServiceRetryTest {
     }
 
     @Test
+    @DisplayName("Transcription persists the text and invalidates the cache")
+    void transcriptionPersistsTextAndClearsCache() {
+        MediaFile file = mediaFile(5L);
+        when(mediaFileMapper.selectById(5L)).thenReturn(file);
+        when(aiAnalysisStrategy.transcribe(anyString())).thenReturn("[00:00] hello");
+
+        aiService.asyncTranscribe(5L);
+
+        assertThat(file.getTranscriptText()).isEqualTo("[00:00] hello");
+        // Summary and transcript are separate columns: transcription must not
+        // clobber a summary that was generated earlier.
+        assertThat(file.getAiSummary()).isNull();
+        verify(mediaFileMapper).updateById(file);
+        verify(redisTemplate).delete("media:list:user:7");
+    }
+
+    @Test
+    @DisplayName("A transcription failure does not propagate out of the async task")
+    void transcriptionFailureIsContained() {
+        MediaFile file = mediaFile(6L);
+        when(mediaFileMapper.selectById(6L)).thenReturn(file);
+        when(aiAnalysisStrategy.transcribe(anyString())).thenThrow(new RuntimeException("whisper down"));
+
+        // Runs on a pool thread with nobody to catch it, so it must swallow
+        aiService.asyncTranscribe(6L);
+
+        verify(mediaFileMapper, never()).updateById(org.mockito.ArgumentMatchers.any(MediaFile.class));
+    }
+
+    @Test
+    @DisplayName("Transcription of a missing row is a no-op")
+    void transcriptionOfMissingRowIsNoOp() {
+        when(mediaFileMapper.selectById(404L)).thenReturn(null);
+
+        aiService.asyncTranscribe(404L);
+
+        verify(aiAnalysisStrategy, never()).transcribe(anyString());
+    }
+
+    @Test
     @DisplayName("A missing media row is a no-op, not a crash")
     void missingMediaRowIsNoOp() {
         when(mediaFileMapper.selectById(404L)).thenReturn(null);
