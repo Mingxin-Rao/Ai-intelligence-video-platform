@@ -35,23 +35,13 @@
    			<version>2.0.40</version>
 		</dependency>
 
-		<dependency>
-    		<groupId>com.google.cloud</groupId>
-    		<artifactId>google-cloud-vertexai</artifactId>
-   			 <version>1.11.0</version>
-		</dependency>
-
-		<dependency>
-			<groupId>com.alibaba</groupId>
-			<artifactId>dashscope-sdk-java</artifactId>
-			<version>2.16.0</version>
-			<exclusions>
-				<exclusion>
-					<groupId>org.slf4j</groupId>
-					<artifactId>slf4j-simple</artifactId>
-				</exclusion>
-			</exclusions>
-		</dependency>
+		<!--
+		  Removed: google-cloud-vertexai and dashscope-sdk-java.
+		  Neither was referenced anywhere in src/ — GeminiUtils talks to the Gemini
+		  REST API directly over okhttp + fastjson2, and the DashScope SDK was left
+		  behind when the Aliyun strategy was deleted. Between them they dragged in
+		  gRPC, protobuf, Guava and BouncyCastle for nothing.
+		-->
 			<dependency>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-starter-web</artifactId>
@@ -162,7 +152,7 @@
               enforces the coverage floor below, so CI and local runs agree.
 
               The floor is a ratchet, not a target: it sits just under the current
-              baseline (~17% instruction) so any regression fails the build.
+              baseline (~20% instruction) so any regression fails the build.
               Raise it as coverage grows — never lower it to make a build pass.
             -->
             <plugin>
@@ -198,7 +188,7 @@
                                         <limit>
                                             <counter>INSTRUCTION</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.15</minimum>
+                                            <minimum>0.18</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

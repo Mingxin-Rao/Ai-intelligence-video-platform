@@ -23,7 +23,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       ROCKETMQ_NAMESERVER: rmqnamesrv:9876
       # Tool paths inside the image (Debian) differ from macOS/Homebrew.
-      FFMPEG_DIR: /usr/bin
+      FFMPEG_DIR: /usr/local/bin
       YTDLP_PATH: /usr/local/bin/yt-dlp
     depends_on:
       # Wait for readiness, not just container start — this is what prevents the
