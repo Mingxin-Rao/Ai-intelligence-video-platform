@@ -19,6 +19,72 @@ public class YtDlpUtils {
     @Value("${tool.ffmpeg.dir}")
     private String ffmpegDir;
 
+    /**
+     * Resolve a link to its canonical source id, e.g. "youtube:dQw4w9WgXcQ",
+     * WITHOUT downloading the video (--print implies simulate mode).
+     *
+     * This is the right dedup key for links: it collapses every URL form of the
+     * same video (youtu.be/x, watch?v=x&t=30s, m.youtube.com/...) and is immune
+     * to re-encoding, whereas a content hash changes whenever yt-dlp picks a
+     * different "best" format. The extractor is prefixed so ids from different
+     * sites cannot collide.
+     *
+     * @return the namespaced id, or null if it cannot be resolved (caller should
+     *         then fall back to content-hash dedup rather than fail).
+     */
+    public String extractSourceId(String url) {
+        Process process = null;
+        try {
+            List<String> command = new ArrayList<>();
+            command.add(ytDlpPath);
+            command.add("--print");
+            command.add("%(extractor)s:%(id)s");
+            command.add("--no-playlist");
+            command.add("--no-warnings");
+            // Same header spoofing as the download path, so metadata resolution
+            // does not get blocked where the download would have succeeded.
+            command.add("--user-agent");
+            command.add("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+            command.add("--no-check-certificate");
+            command.add(url);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            process = pb.start();
+
+            String output;
+            try (java.io.InputStream in = process.getInputStream()) {
+                output = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).trim();
+            }
+
+            // Metadata lookup is a single request; don't let it stall the request thread.
+            if (!process.waitFor(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                System.err.println("⚠️ [yt-dlp] Timed out resolving source id for: " + url);
+                return null;
+            }
+            if (process.exitValue() != 0 || output.isEmpty()) {
+                System.err.println("⚠️ [yt-dlp] Could not resolve source id: " + output);
+                return null;
+            }
+
+            // Guard against extra lines (warnings etc.) sneaking into stdout
+            String id = output.lines().reduce((a, b) -> b).orElse("").trim();
+            if (id.isEmpty() || id.contains(" ")) return null;
+
+            System.out.println("🆔 [yt-dlp] Resolved source id: " + id);
+            return id;
+
+        } catch (Exception e) {
+            System.err.println("⚠️ [yt-dlp] Source id lookup failed: " + e.getMessage());
+            return null;
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
     public File downloadVideo(String url) throws Exception {
         String tempDir = System.getProperty("java.io.tmpdir");
         String outputName = UUID.randomUUID().toString() + ".mp4";

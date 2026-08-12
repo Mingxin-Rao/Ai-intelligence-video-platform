@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -92,33 +91,40 @@ public class MediaController {
         try {
             System.out.println("🔗 Received link upload request: " + url);
 
+            // Links dedup on the source video id, NOT a content hash. The same video
+            // has many URL forms, and yt-dlp may resolve "best format" differently
+            // between runs, so the downloaded bytes are not a stable identity.
+            // Resolving the id costs one metadata request and lets us skip the
+            // entire download when we already have the video.
+            String sourceId = ytDlpUtils.extractSourceId(url);
+            if (sourceId != null) {
+                MediaFile existing = findByUserAndSourceId(userId, sourceId);
+                if (existing != null) {
+                    System.out.println("♻️ Duplicate link (" + sourceId + "), reusing record id=" + existing.getId());
+                    // Returns before downloading a single byte
+                    return org.springframework.http.ResponseEntity.ok(
+                            "Upload successful (duplicate video — reused existing file)");
+                }
+            }
+
             // Download via yt-dlp
             tempFile = ytDlpUtils.downloadVideo(url);
 
-            // Content fingerprint of the downloaded file (URLs are unreliable keys — same video
-            // has many URL forms — so we dedup on the actual bytes).
-            String md5;
-            try (InputStream in = new FileInputStream(tempFile)) {
-                md5 = DigestUtils.md5DigestAsHex(in);
-            }
-
-            // Dedup: same user already has this content => reuse, skip re-upload and the duplicate row.
-            MediaFile existing = findByUserAndMd5(userId, md5);
-            if (existing != null) {
-                System.out.println("♻️ Duplicate link content (md5=" + md5 + "), reusing record id=" + existing.getId());
-                return org.springframework.http.ResponseEntity.ok("Upload successful (duplicate content — reused existing file)");
-            }
-
-            // Upload to MinIO under the MD5-based object name
-            String fileUrl = minioUtils.uploadLocalFile(tempFile, md5 + ".mp4");
+            // Name the object after the source id so the same video maps to one object.
+            // If the id could not be resolved, keep the random temp name — this one
+            // simply cannot be deduped rather than failing the upload.
+            String objectName = (sourceId != null)
+                    ? sanitizeObjectName(sourceId) + ".mp4"
+                    : tempFile.getName();
+            String fileUrl = minioUtils.uploadLocalFile(tempFile, objectName);
 
             // Persist to the database
             MediaFile mediaFile = new MediaFile();
-            mediaFile.setFilename("WEB_" + tempFile.getName());
+            mediaFile.setFilename("WEB_" + objectName);
             mediaFile.setFilePath(fileUrl);
             mediaFile.setStatus("COMPLETED");
             mediaFile.setUserId(userId);
-            mediaFile.setVideoMd5(md5);
+            mediaFile.setSourceVideoId(sourceId);
 
             mediaFileMapper.insert(mediaFile);
             clearListCache(userId);
@@ -201,11 +207,26 @@ public class MediaController {
     }
 
     // Return the most recent record this user owns with the given content MD5, or null.
+    // Used for direct file uploads, where the bytes ARE the identity.
     private MediaFile findByUserAndMd5(Long userId, String md5) {
         if (userId == null || md5 == null) return null;
         QueryWrapper<MediaFile> query = new QueryWrapper<>();
         query.eq("user_id", userId).eq("video_md5", md5).orderByDesc("id").last("LIMIT 1");
         return mediaFileMapper.selectOne(query);
+    }
+
+    // Return the most recent record this user owns for the given source video id, or null.
+    // Used for link imports, where the upstream id is the stable identity.
+    private MediaFile findByUserAndSourceId(Long userId, String sourceId) {
+        if (userId == null || sourceId == null) return null;
+        QueryWrapper<MediaFile> query = new QueryWrapper<>();
+        query.eq("user_id", userId).eq("source_video_id", sourceId).orderByDesc("id").last("LIMIT 1");
+        return mediaFileMapper.selectOne(query);
+    }
+
+    // "youtube:dQw4w9WgXcQ" -> "youtube_dQw4w9WgXcQ"; keeps object keys URL-safe.
+    private String sanitizeObjectName(String raw) {
+        return raw.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     // Extract the file extension (including the dot), or "" if none.
