@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.server.entity.MediaFile;
 import com.example.server.interceptor.AuthInterceptor;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.metrics.AppMetrics;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.YtDlpUtils; // Make sure this is imported
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -40,6 +41,9 @@ public class MediaController {
     @Autowired
     private YtDlpUtils ytDlpUtils;
 
+    @Autowired
+    private AppMetrics metrics;
+
 
     @PostMapping("/upload")
     public String upload(@RequestParam("file") MultipartFile file, HttpServletRequest request) {
@@ -56,6 +60,7 @@ public class MediaController {
             MediaFile existing = findByUserAndMd5(userId, md5);
             if (existing != null) {
                 System.out.println("♻️ Duplicate content (md5=" + md5 + "), reusing record id=" + existing.getId());
+                metrics.recordDedupHit(AppMetrics.SOURCE_FILE);
                 return "Upload successful (duplicate content — reused existing file)";
             }
 
@@ -101,6 +106,7 @@ public class MediaController {
                 MediaFile existing = findByUserAndSourceId(userId, sourceId);
                 if (existing != null) {
                     System.out.println("♻️ Duplicate link (" + sourceId + "), reusing record id=" + existing.getId());
+                    metrics.recordDedupHit(AppMetrics.SOURCE_LINK);
                     // Returns before downloading a single byte
                     return org.springframework.http.ResponseEntity.ok(
                             "Upload successful (duplicate video — reused existing file)");
@@ -153,12 +159,14 @@ public class MediaController {
             String json = redisTemplate.opsForValue().get(cacheKey);
             if (json != null) {
                 System.out.println("Redis cache hit, returning directly!");
+                metrics.recordCacheAccess(true);
                 return objectMapper.readValue(json, new TypeReference<List<MediaFile>>(){});
             }
         } catch (Exception e) {
             System.err.println("Redis read failed: " + e.getMessage());
         }
 
+        metrics.recordCacheAccess(false);
         QueryWrapper<MediaFile> query = new QueryWrapper<>();
         query.eq("user_id", userId);
         List<MediaFile> list = mediaFileMapper.selectList(query.orderByDesc("id"));

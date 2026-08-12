@@ -2,6 +2,7 @@ package com.example.server.service;
 
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.metrics.AppMetrics;
 import com.example.server.strategy.AiAnalysisStrategy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,9 @@ class AiServiceRetryTest {
 
     @Mock
     private StringRedisTemplate redisTemplate;
+
+    @Mock
+    private AppMetrics metrics;
 
     @InjectMocks
     private AiService aiService;

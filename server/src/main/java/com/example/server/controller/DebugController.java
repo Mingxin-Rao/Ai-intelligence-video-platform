@@ -4,6 +4,7 @@ import com.example.server.dto.AnalysisTaskMsg;
 import com.example.server.entity.MediaFile;
 import com.example.server.interceptor.AuthInterceptor;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.metrics.AppMetrics;
 import com.example.server.service.AiService;
 import com.example.server.strategy.AiAnalysisStrategy;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,6 +42,9 @@ public class DebugController {
     @Autowired
     private AiService aiService;
 
+    @Autowired
+    private AppMetrics metrics;
+
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -72,6 +76,7 @@ public class DebugController {
 
         try {
             if (!lock.tryLock(0, -1, TimeUnit.SECONDS)) {
+                metrics.recordLockContention();
                 return "⚠️ Task is being submitted, please don't click again!";
             }
 
@@ -84,6 +89,7 @@ public class DebugController {
 
             // Try to acquire one token
             if (!rateLimiter.tryAcquire(1)) {
+                metrics.recordRateLimited();
                 return "⚠️ System busy (rate limited). Please try again in 1 minute!";
             }
 
