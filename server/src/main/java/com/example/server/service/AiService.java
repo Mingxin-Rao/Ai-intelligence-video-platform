@@ -2,12 +2,15 @@ package com.example.server.service;
 
 import com.example.server.entity.MediaFile;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.metrics.AppMetrics;
 import com.example.server.strategy.AiAnalysisStrategy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+
+import java.time.Duration;
 
 @Service
 public class AiService {
@@ -22,6 +25,9 @@ public class AiService {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
+    @Autowired
+    private AppMetrics metrics;
+
     /**
      * Asynchronously analyze a video (AI summary report).
      */
@@ -32,6 +38,9 @@ public class AiService {
         MediaFile mediaFile = mediaFileMapper.selectById(mediaId);
         if (mediaFile == null) return;
 
+        // Timed here rather than around the strategy call: this is the latency the
+        // user actually waits through while polling, retries and all.
+        long startedAt = System.nanoTime();
         try {
             //    Exponential-backoff retry: up to 3 attempts on AI/network hiccups (1s, 2s gaps).
             final int maxAttempts = 3;
@@ -42,6 +51,7 @@ public class AiService {
                 if (summary != null && !summary.startsWith("❌")) break;
                 System.err.println("⚠️ [ThreadPool] AI attempt " + attempt + "/" + maxAttempts
                         + " failed for ID " + mediaId + ": " + summary);
+                metrics.recordAiRetry();
                 if (attempt < maxAttempts) {
                     try {
                         Thread.sleep((long) Math.pow(2, attempt - 1) * 1000L);
@@ -63,6 +73,10 @@ public class AiService {
             //    Force-clear the Redis cache so the frontend can load the fresh data.
             cleanRedisCache(mediaFile.getUserId());
 
+            metrics.recordAiTask(
+                    failed ? AppMetrics.OUTCOME_FAILURE : AppMetrics.OUTCOME_SUCCESS,
+                    Duration.ofNanos(System.nanoTime() - startedAt));
+
             if (failed) {
                 // Backend records a clear failure (frontend shows ❌ and can retry)
                 System.err.println("❌ [ThreadPool] AI analysis FAILED after " + maxAttempts + " attempts, ID: " + mediaId);
@@ -73,6 +87,9 @@ public class AiService {
         } catch (Exception e) {
             System.err.println("❌ [ThreadPool] AI analysis crashed: " + e.getMessage());
             e.printStackTrace();
+            metrics.recordAiTask(AppMetrics.OUTCOME_FAILURE,
+                    Duration.ofNanos(System.nanoTime() - startedAt));
+            metrics.recordMediaFailure(AppMetrics.REASON_AI_ERROR);
             // Surface the crash so the user sees it failed and can retry
             try {
                 mediaFile.setAiSummary("❌ Analysis error: " + e.getMessage());

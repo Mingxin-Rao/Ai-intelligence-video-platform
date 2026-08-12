@@ -1,0 +1,102 @@
+groups:
+  - name: dovideo-app
+    rules:
+      # ---------------------------------------------------------------------
+      # Availability
+      # ---------------------------------------------------------------------
+      - alert: AppDown
+        expr: up{job="dovideo-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend is not being scraped"
+          description: "Prometheus cannot reach {{ $labels.instance }}. The API is likely down."
+
+      # ---------------------------------------------------------------------
+      # The signal that matters most: once a task is on the queue it leaves the
+      # HTTP request, so a broken consumer looks like a healthy server. Without
+      # this alert the first report comes from a user staring at a spinner.
+      # ---------------------------------------------------------------------
+      - alert: AiTaskFailureRateHigh
+        expr: |
+          sum(rate(dovideo_ai_task_seconds_count{outcome="failure"}[5m]))
+            /
+          clamp_min(sum(rate(dovideo_ai_task_seconds_count[5m])), 0.001)
+            > 0.2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Over 20% of AI tasks are failing"
+          description: "Usually an expired/invalid provider key, an upstream outage, or FFmpeg failing in the container."
+
+      # Retries are the leading indicator: they rise before the failure rate does,
+      # because the retry loop still recovers most blips.
+      - alert: AiRetryRateElevated
+        expr: sum(rate(dovideo_ai_retry_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI provider retries are elevated"
+          description: "Upstream is flaky; tasks still complete but latency is inflated."
+
+      # ---------------------------------------------------------------------
+      # Latency: P95 rather than mean, because a few very long videos otherwise
+      # hide behind a healthy-looking average.
+      # ---------------------------------------------------------------------
+      - alert: AiTaskP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(dovideo_ai_task_seconds_bucket[10m])) by (le)
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 AI task duration above 5 minutes"
+          description: "FFmpeg may be stalling on a remote read, or the provider has slowed down."
+
+      # ---------------------------------------------------------------------
+      # Saturation / cost
+      # ---------------------------------------------------------------------
+      # The limiter doing its job occasionally is fine; sustained rejection means
+      # real demand exceeds the configured ceiling and needs a capacity decision.
+      - alert: RateLimiterRejectingSustained
+        expr: sum(rate(dovideo_ratelimit_rejected_total[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Submissions are being rate-limited continuously"
+          description: "Either genuine demand above the 10/min ceiling, or abuse from one caller."
+
+      # The queue-backed thread pool is the actual processing capacity. Once the
+      # queue is deep, new work waits or falls back to the caller thread.
+      - alert: AiThreadPoolQueueBacklog
+        expr: executor_queued_tasks{name="aiTaskExecutor"} > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI thread pool backlog above 50 tasks"
+          description: "Consumption is behind production; scale consumers (and Topic queues) out."
+
+      # ---------------------------------------------------------------------
+      # Cache effectiveness — not a failure, but a regression here means the
+      # frontend's 3s polling is hitting MySQL on every request.
+      # ---------------------------------------------------------------------
+      - alert: MediaListCacheHitRateLow
+        expr: |
+          sum(rate(dovideo_cache_access_total{result="hit"}[15m]))
+            /
+          clamp_min(sum(rate(dovideo_cache_access_total[15m])), 0.001)
+            < 0.5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Media list cache hit rate below 50%"
+          description: "Cache is being invalidated more often than it is read, or Redis is unreachable."

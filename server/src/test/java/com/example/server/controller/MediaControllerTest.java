@@ -3,6 +3,7 @@ package com.example.server.controller;
 import com.example.server.entity.MediaFile;
 import com.example.server.interceptor.AuthInterceptor;
 import com.example.server.mapper.MediaFileMapper;
+import com.example.server.metrics.AppMetrics;
 import com.example.server.utils.MinioUtils;
 import com.example.server.utils.YtDlpUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,6 +58,8 @@ class MediaControllerTest {
     private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     @Mock
     private ObjectMapper objectMapper;
+    @Mock
+    private AppMetrics metrics;
 
     @InjectMocks
     private MediaController mediaController;

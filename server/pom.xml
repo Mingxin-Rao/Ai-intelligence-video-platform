@@ -105,6 +105,12 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
+		<!-- Renders the meters at /actuator/prometheus for Prometheus to scrape -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+
 		<!-- JUnit 5 + Mockito + AssertJ + spring-test (MockHttpServletRequest) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -152,7 +158,7 @@
               enforces the coverage floor below, so CI and local runs agree.
 
               The floor is a ratchet, not a target: it sits just under the current
-              baseline (~20% instruction) so any regression fails the build.
+              baseline (~24% instruction) so any regression fails the build.
               Raise it as coverage grows — never lower it to make a build pass.
             -->
             <plugin>
@@ -188,7 +194,7 @@
                                         <limit>
                                             <counter>INSTRUCTION</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.18</minimum>
+                                            <minimum>0.22</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

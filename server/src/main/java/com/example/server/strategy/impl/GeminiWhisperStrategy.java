@@ -1,5 +1,6 @@
 package com.example.server.strategy.impl;
 
+import com.example.server.metrics.AppMetrics;
 import com.example.server.strategy.AiAnalysisStrategy;
 import com.example.server.utils.GeminiUtils;
 import com.example.server.utils.OpenAiWhisperUtils;
@@ -33,6 +34,9 @@ public class GeminiWhisperStrategy implements AiAnalysisStrategy {
     @Autowired
     private GeminiUtils geminiUtils;
 
+    @Autowired
+    private AppMetrics metrics;
+
     @Override
     public String transcribe(String videoPath) {
         return processVideoToText(videoPath);
@@ -50,12 +54,14 @@ public class GeminiWhisperStrategy implements AiAnalysisStrategy {
             // otherwise a silent video reports a misleading failure.
             if (!hasAudioStream(videoPath)) {
                 System.out.println("🔇 [AI Summary] No audio stream in " + videoPath);
+                metrics.recordMediaFailure(AppMetrics.REASON_NO_AUDIO);
                 return NO_AUDIO_MESSAGE;
             }
 
             //    Call extractAudio (passing the input and output paths).
             boolean success = extractAudio(videoPath, tempAudioPath);
             if (!success) {
+                metrics.recordMediaFailure(AppMetrics.REASON_EXTRACTION);
                 return "❌ Audio extraction failed, cannot generate summary";
             }
 

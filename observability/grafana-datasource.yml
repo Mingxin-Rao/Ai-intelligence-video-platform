@@ -1,0 +1,10 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Service name on the compose network, container port (not the host mapping).
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
