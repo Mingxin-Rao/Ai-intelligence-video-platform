@@ -9,7 +9,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
-import java.util.UUID;
 
 @Component
 public class MinioUtils {
@@ -24,30 +23,22 @@ public class MinioUtils {
     private String endpoint;
 
     /**
-     * Upload a file and return its access URL
+     * Upload a file under an explicit object name (caller passes an MD5-based name so that
+     * identical content maps to the same object — natural, idempotent storage-level dedup).
      */
-    public String uploadFile(MultipartFile file) throws Exception {
-        // 1. Generate a new filename (UUID prevents name collisions)
-        String originalFilename = file.getOriginalFilename();
-        String suffix = "";
-        if (originalFilename != null && originalFilename.contains(".")) {
-            suffix = originalFilename.substring(originalFilename.lastIndexOf("."));
+    public String uploadFile(MultipartFile file, String objectName) throws Exception {
+        try (InputStream inputStream = file.getInputStream()) {
+            minioClient.putObject(
+                    PutObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(objectName)
+                            .stream(inputStream, file.getSize(), -1)
+                            .contentType(file.getContentType())
+                            .build()
+            );
         }
-        String newFilename = UUID.randomUUID().toString() + suffix;
-
-        // 2. Upload to MinIO
-        InputStream inputStream = file.getInputStream();
-        minioClient.putObject(
-                PutObjectArgs.builder()
-                        .bucket(bucketName)
-                        .object(newFilename)
-                        .stream(inputStream, file.getSize(), -1)
-                        .contentType(file.getContentType())
-                        .build()
-        );
-
-        // 3. Concatenate and return the public access URL
-        return endpoint + "/" + bucketName + "/" + newFilename;
+        // Return the public access URL
+        return endpoint + "/" + bucketName + "/" + objectName;
     }
 
     /**
@@ -74,21 +65,19 @@ public class MinioUtils {
     }
 
     /**
-     * [New] Upload a local File object to MinIO
+     * [New] Upload a local File object to MinIO under an explicit (MD5-based) object name.
      */
-    public String uploadLocalFile(java.io.File file) throws Exception {
-        java.io.FileInputStream inputStream = new java.io.FileInputStream(file);
-
-        minioClient.putObject(
-                io.minio.PutObjectArgs.builder()
-                        .bucket(bucketName)
-                        .object(file.getName()) // The filename already contains a UUID
-                        .stream(inputStream, file.length(), -1)
-                        .contentType("video/mp4") // Handle as mp4 by default
-                        .build()
-        );
-        inputStream.close();
-
-        return endpoint + "/" + bucketName + "/" + file.getName();
+    public String uploadLocalFile(java.io.File file, String objectName) throws Exception {
+        try (java.io.FileInputStream inputStream = new java.io.FileInputStream(file)) {
+            minioClient.putObject(
+                    io.minio.PutObjectArgs.builder()
+                            .bucket(bucketName)
+                            .object(objectName)
+                            .stream(inputStream, file.length(), -1)
+                            .contentType("video/mp4") // Handle as mp4 by default
+                            .build()
+            );
+        }
+        return endpoint + "/" + bucketName + "/" + objectName;
     }
 }
