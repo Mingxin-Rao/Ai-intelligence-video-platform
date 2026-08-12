@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow running the pipeline by hand from the Actions tab
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch instead of paying for both
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17 is pinned deliberately: Lombok 1.18.30 fails to compile on newer
+      # JDKs ("TypeTag :: UNKNOWN"), so letting the runner pick a default would
+      # break the build unpredictably.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      # `verify` runs the unit tests, produces the JaCoCo report and enforces the
+      # coverage floor configured in pom.xml — one command, same as locally.
+      - name: Build, test and check coverage
+        working-directory: server
+        run: mvn -B -ntp verify
+
+      - name: Publish coverage summary
+        if: always()
+        working-directory: server
+        run: |
+          CSV=target/site/jacoco/jacoco.csv
+          if [ ! -f "$CSV" ]; then
+            echo "No JaCoCo report produced." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Coverage"
+            echo ""
+            awk -F, 'NR>1 {mi+=$4; ci+=$5; mb+=$6; cb+=$7} END {
+              printf "- **Instruction:** %.1f%% (%d/%d)\n", ci*100/(mi+ci), ci, mi+ci;
+              printf "- **Branch:** %.1f%% (%d/%d)\n", cb*100/(mb+cb), cb, mb+cb;
+            }' "$CSV"
+            echo ""
+            echo "| Class | Instruction coverage |"
+            echo "|---|---|"
+            awk -F, 'NR>1 && ($4+$5)>0 {c=$5*100/($4+$5); if (c>0) printf "| %s | %.1f%% |\n", $3, c}' "$CSV" | sort -t'|' -k3 -rn
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keep the raw reports so a failing run can be diagnosed after the fact
+      - name: Upload test & coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            server/target/surefire-reports/
+            server/target/site/jacoco/
+          retention-days: 14
+
+  docker:
+    name: Docker Image
+    runs-on: ubuntu-latest
+    # Don't spend time building an image from code that fails its tests
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only (no registry push): this proves the Dockerfile is valid and
+      # the app is genuinely containerizable on every change.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: dovideo-app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report image size
+        run: |
+          SIZE=$(docker image inspect dovideo-app:ci --format '{{.Size}}')
+          {
+            echo "## Image"
+            echo ""
+            echo "- **Tag:** \`dovideo-app:ci\`"
+            echo "- **Size:** $(numfmt --to=iec "$SIZE")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Fail loudly if the two native tools the app shells out to are missing —
+      # a working jar with no FFmpeg still cannot generate a single summary.
+      - name: Verify runtime tools are present in the image
+        run: |
+          docker run --rm --entrypoint sh dovideo-app:ci -c \
+            'ffmpeg -version >/dev/null && yt-dlp --version >/dev/null && echo "ffmpeg + yt-dlp OK"'
