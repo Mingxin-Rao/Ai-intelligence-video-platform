@@ -27,7 +27,9 @@ yarn-error.log*
 # ---- Env / secrets ----
 .env
 .env.*
+.env.local
 !.env.example
+!client/.env.example
 
 # ---- Misc build output ----
 output/

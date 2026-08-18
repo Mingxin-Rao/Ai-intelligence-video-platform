@@ -329,7 +329,11 @@ const pollingTimers = ref({})
 const confirmModal = ref({ visible: false, title: '', message: '', confirmText: 'Confirm', resolve: null })
 
 // Backend API base URL
-const API_BASE = 'http://localhost:9090'
+// The API origin. Overridable because the backend's host port is itself
+// overridable (APP_PORT in the root .env), so hard-coding 9090 breaks the moment
+// something else already owns that port.
+//   echo 'VITE_API_BASE=http://localhost:9091' > client/.env.local
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:9090'
 
 // Markdown parsing (strips any <think> reasoning blocks)
 const renderedMarkdown = computed(() => {
