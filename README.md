@@ -17,17 +17,6 @@ Resumable chunked uploads · asynchronous AI processing · content deduplication
 
 </div>
 
----
-
-## Demo
-
-<!-- TODO: replace with the recorded walkthrough.
-     ![DoVideoAI demo](docs/demo.gif) -->
-
-> 🎬 **Demo coming soon.**
-
----
-
 ## What this is
 
 A video understanding platform: sign in, upload a file or paste a link, and get an
